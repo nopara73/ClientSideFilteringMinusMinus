@@ -33,17 +33,13 @@ In order to lower the size of the filters, instead of scriptPubKeys, the hash of
 using (SHA256Managed sha256 = new SHA256Managed())
 {
      var hash = sha256.ComputeHash(Encoding.ASCII.GetBytes(input));
-     return new String(Convert.ToBase64String(hash).Take(4).ToArray());
+     return new String(Convert.ToBase64String(hash).Take(6).ToArray());
 }
 ```
 
 A filter is serialized as follows: `{blockHeight}:{blockHash}\n{list of scriptPubKey hashes}\n`.  
 
-In this case the filters are roughly 60 times smaller than the whole blockchain and 1GB results in roughly 100 scriptPubKey hash collision. From a privacy point of view some scriptPubKey hash collision is preferable, since more blocks would be examined by the user, yet it's still unlikely the users' scriptPubKeys would collide with other users.
-
-Through gzip compressing the serialized file we can further lower the final filter file by 30%.  
-
-Today the Bitcoin blockchain is 150GB. This means the compressed filters would be around 1.75GB.
+With added gzip compression the serialized size of the filters is 5GB, while today's blockchain is 150GB.
 
 #### Further Efficiency
 
@@ -58,6 +54,7 @@ The client maintains its own wallet and its own transactions on the disk, theref
 using NBitcoin;
 using NBitcoin.RPC;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -73,23 +70,31 @@ namespace FilterTest
     {
         public static RPCClient RpcClient;
 
-    #pragma warning disable IDE1006 // Naming Styles
+#pragma warning disable IDE1006 // Naming Styles
         static async Task Main(string[] args)
-    #pragma warning restore IDE1006 // Naming Styles
+#pragma warning restore IDE1006 // Naming Styles
         {
             try
             {
                 var filtersFileName = "Filters.dat";
+
+                var extKey = new ExtKey();
+                var newlyGeneratedScripts = new HashSet<Script>();
+                for (int i = 0; i < 1000; i++)
+                {
+                    newlyGeneratedScripts.Add(extKey.Derive(i, true).Neuter().PubKey.GetAddress(Network.Main).ScriptPubKey);
+                }
+                var blockCollisionCount = 0;
 
                 await InitializeEverythingAsync(filtersFileName);
 
                 var collisions = 0;
                 var bestBlockHeight = RpcClient.GetBlockCount();
                 long chainSize = 0;
-                var utxoSet = new Dictionary<(uint256 txid, int n), TxOut>();
-                //for (int i = 407000; i < 407701; i++) // nice full blocks here
+                //var utxoSet = new Dictionary<(uint256 txid, int n), TxOut>();
+                for (int i = 407000; i < 407701; i++) // nice full blocks here
                 //for (int i = 220000; i < bestBlockHeight; i++) // 220000 height is when the blockchain started to grow (2013)
-                for (int i = 0; i < bestBlockHeight; i++) // blocks from the beginning of times
+                //for (int i = 0; i < bestBlockHeight; i++) // blocks from the beginning of times
                 {
                     var scriptPubKeys = new HashSet<string>();
                     var hashes = new HashSet<string>();
@@ -100,31 +105,30 @@ namespace FilterTest
                         for (int k = 0; k < tx.Outputs.Count; k++)
                         {
                             var output = tx.Outputs[k];
-                            if(!utxoSet.TryAdd((tx.GetHash(), k), output)) // for some reason it fails once in a while
-                            {
-                                Console.WriteLine($"Ignoring: utxoSet already contains: {tx.GetHash()} {k}.");
-                            }
+                            //if(!utxoSet.TryAdd((tx.GetHash(), k), output)) // for some reason it fails once in a while
+                            //{
+                            //    Console.WriteLine($"Ignoring: utxoSet already contains: {tx.GetHash()} {k}.");
+                            //}
                             string hex = output.ScriptPubKey.ToHex();
                             scriptPubKeys.Add(hex);
-                            var hash = GenerateShortSha256Hash(hex);
-                            hashes.Add(hash);
+                            hashes.Add(GenerateShortSha256Hash(hex));
                         }
 
-                        if (!tx.IsCoinBase)
-                        {
-                            foreach (var input in tx.Inputs)
-                            {
-                                var found = utxoSet.Single(x => x.Key.txid == input.PrevOut.Hash && x.Key.n == input.PrevOut.N);
-                                TxOut prevTxOut = found.Value;
+                        //if (!tx.IsCoinBase)
+                        //{
+                        //    foreach (var input in tx.Inputs)
+                        //    {
+                        //        var found = utxoSet.Single(x => x.Key.txid == input.PrevOut.Hash && x.Key.n == input.PrevOut.N);
+                        //        TxOut prevTxOut = found.Value;
 
-                                var hex = prevTxOut.ScriptPubKey.ToHex();
-                                scriptPubKeys.Add(hex);
-                                var hash = GenerateShortSha256Hash(hex);
-                                hashes.Add(hash);
+                        //        var hex = prevTxOut.ScriptPubKey.ToHex();
+                        //        scriptPubKeys.Add(hex);
+                        //        var hash = GenerateShortSha256Hash(hex);
+                        //        hashes.Add(hash);
 
-                                utxoSet.Remove(found.Key);
-                            }
-                        }
+                        //        utxoSet.Remove(found.Key);
+                        //    }
+                        //}
                     }
 
                     collisions += scriptPubKeys.Count - hashes.Count;
@@ -142,19 +146,28 @@ namespace FilterTest
                         }
                     }
 
+                    foreach (var scp in newlyGeneratedScripts)
+                    {
+                        if (hashes.Contains(GenerateShortSha256Hash(scp.ToHex())))
+                        {
+                            blockCollisionCount++;
+                            Console.WriteLine($"Height: {i}, block collision found: {blockCollisionCount}");
+                            break;
+                        }
+                    }
+
                     var builder = new StringBuilder();
                     builder.Append(i);
                     builder.Append(":");
                     builder.Append(block.GetHash());
                     builder.Append("\n");
-                    foreach (var scp in hashes)
+                    foreach (var hash in hashes)
                     {
-                        builder.Append(scp);
+                        builder.Append(hash);
                     }
                     builder.Append("\n");
 
-                    var filter = builder.ToString();
-                    await File.AppendAllTextAsync(filtersFileName, filter);
+                    await File.AppendAllTextAsync(filtersFileName, builder.ToString());
                 }
 
                 Console.WriteLine($"Collisions:{collisions}");
@@ -208,7 +221,7 @@ namespace FilterTest
             RpcClient = new RPCClient(
             credentials: new RPCCredentialString
             {
-                UserPassword = new NetworkCredential("username", "password")
+                UserPassword = new NetworkCredential("bitcoinuser", "Polip69")
             },
             network: Network.Main);
             await AssertRpcNodeFullyInitializedAsync();
@@ -225,7 +238,7 @@ namespace FilterTest
             {
                 var hash = sha256.ComputeHash(Encoding.ASCII.GetBytes(input));
 
-                return new String(Convert.ToBase64String(hash).Take(4).ToArray());
+                return new String(Convert.ToBase64String(hash).Take(6).ToArray());
             }
         }
 
