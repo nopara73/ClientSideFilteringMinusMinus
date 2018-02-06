@@ -30,9 +30,9 @@ In the current form of the scheme the filters are just as big as the Bitcoin blo
 In order to lower the size of the filters, instead of scriptPubKeys, the hash of the scriptPubKeys must maintained and forwarded to the client. The client knows what it is looking for, so it can just as easily compare hashes.
 
 ```cs
-using (SHA1Managed sha1 = new SHA1Managed())
+using (SHA256Managed sha256 = new SHA256Managed())
 {
-     var hash = sha1.ComputeHash(Encoding.ASCII.GetBytes(input));
+     var hash = sha256.ComputeHash(Encoding.ASCII.GetBytes(input));
      return new String(Convert.ToBase64String(hash).Take(4).ToArray());
 }
 ```
@@ -106,7 +106,7 @@ namespace FilterTest
                             }
                             string hex = output.ScriptPubKey.ToHex();
                             scriptPubKeys.Add(hex);
-                            var hash = GenerateShortSha1Hash(hex);
+                            var hash = GenerateShortSha256Hash(hex);
                             hashes.Add(hash);
                         }
 
@@ -119,7 +119,7 @@ namespace FilterTest
 
                                 var hex = prevTxOut.ScriptPubKey.ToHex();
                                 scriptPubKeys.Add(hex);
-                                var hash = GenerateShortSha1Hash(hex);
+                                var hash = GenerateShortSha256Hash(hex);
                                 hashes.Add(hash);
 
                                 utxoSet.Remove(found.Key);
@@ -219,11 +219,11 @@ namespace FilterTest
         /// Quickly generates a short, relatively unique hash
         /// https://codereview.stackexchange.com/questions/102251/short-hash-generator
         /// </summary>
-        public static string GenerateShortSha1Hash(string input)
+        public static string GenerateShortSha256Hash(string input)
         {
-            using (SHA1Managed sha1 = new SHA1Managed())
+            using (SHA256Managed sha256 = new SHA256Managed())
             {
-                var hash = sha1.ComputeHash(Encoding.ASCII.GetBytes(input));
+                var hash = sha256.ComputeHash(Encoding.ASCII.GetBytes(input));
 
                 return new String(Convert.ToBase64String(hash).Take(4).ToArray());
             }
